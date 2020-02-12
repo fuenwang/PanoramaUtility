@@ -7,42 +7,44 @@ import sys
 import math
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 import scipy.misc as sic
 import matplotlib.pyplot as plt
 
 
-class Cube2Equirec(object):
-    def __init__(self, cube_length, output_h, output_w, CUDA=False):
+class Cube2Equirec(nn.Module):
+    def __init__(self, equ_h, equ_w, cube_length, CUDA=False):
+        super(Cube2Equirec, self).__init__()
         self.batch_size = 1 # NOTE: not in use at all
-        self.cube_h = cube_size
-        self.cube_w = cube_size
-        self.output_h = output_h
-        self.output_w = output_w
+        self.cube_h = cube_length
+        self.cube_w = cube_length
+        self.equ_h = equ_h
+        self.equ_w = equ_w
         self.fov = 90
         self.fov_rad = self.fov * np.pi / 180
         self.CUDA = CUDA
 
         # Compute the parameters for projection
         assert self.cube_w == self.cube_h
-        self.radius = int(0.5 * cube_size)
+        self.radius = int(0.5 * cube_length)
 
         # Map equirectangular pixel to longitude and latitude
         # NOTE: Make end a full length since arange have a right open bound [a, b)
-        theta_start = math.pi - (math.pi / output_w)
+        theta_start = math.pi - (math.pi / equ_w)
         theta_end = -math.pi
-        theta_step = 2 * math.pi / output_w
+        theta_step = 2 * math.pi / equ_w
         theta_range = torch.arange(theta_start, theta_end, -theta_step)
 
-        phi_start = 0.5 * math.pi - (0.5 * math.pi / output_h)
+        phi_start = 0.5 * math.pi - (0.5 * math.pi / equ_h)
         phi_end = -0.5 * math.pi
-        phi_step = math.pi / output_h
+        phi_step = math.pi / equ_h
         phi_range = torch.arange(phi_start, phi_end, -phi_step)
 
         # Stack to get the longitude latitude map
-        self.theta_map = theta_range.unsqueeze(0).repeat(output_h, 1)
-        self.phi_map = phi_range.unsqueeze(-1).repeat(1, output_w)
+        self.theta_map = theta_range.unsqueeze(0).repeat(equ_h, 1)
+        self.phi_map = phi_range.unsqueeze(-1).repeat(1, equ_w)
         self.lonlat_map = torch.stack([self.theta_map, self.phi_map], dim=-1)
 
         # Get mapping relation (h, w, face)
@@ -86,7 +88,7 @@ class Cube2Equirec(object):
         mask_right = mask_right_lon * mask_right_lat
 
         # mask_up_lat = (self.lonlat_map[:, :, 1] >= 0.5 * self.fov_rad)
-        mask_up = torch.ones([self.output_h, self.output_w])
+        mask_up = torch.ones([self.equ_h, self.equ_w])
         mask_up = mask_up - (self.lonlat_map[:, :, 1] < 0).float() - \
                   (mask_front.float() + mask_right.float() + mask_left.float() + mask_back.float())
         mask_up = (mask_up == 1)
@@ -98,15 +100,15 @@ class Cube2Equirec(object):
 
     def get_grid2(self):
         # Get the point of equirectangular on 3D ball
-        x_3d = (self.radius * torch.cos(self.phi_map) * torch.sin(self.theta_map)).view(self.output_h, self.output_w, 1)
-        y_3d = (self.radius * torch.sin(self.phi_map)).view(self.output_h, self.output_w, 1)
-        z_3d = (self.radius * torch.cos(self.phi_map) * torch.cos(self.theta_map)).view(self.output_h, self.output_w, 1)
+        x_3d = (self.radius * torch.cos(self.phi_map) * torch.sin(self.theta_map)).view(self.equ_h, self.equ_w, 1)
+        y_3d = (self.radius * torch.sin(self.phi_map)).view(self.equ_h, self.equ_w, 1)
+        z_3d = (self.radius * torch.cos(self.phi_map) * torch.cos(self.theta_map)).view(self.equ_h, self.equ_w, 1)
 
-        self.grid_ball = torch.cat([x_3d, y_3d, z_3d], 2).view(self.output_h, self.output_w, 3)
+        self.grid_ball = torch.cat([x_3d, y_3d, z_3d], 2).view(self.equ_h, self.equ_w, 3)
 
         # Compute the down grid
         radius_ratio_down = torch.abs(y_3d / self.radius)
-        grid_down_raw = self.grid_ball / radius_ratio_down.view(self.output_h, self.output_w, 1).expand(-1, -1, 3)
+        grid_down_raw = self.grid_ball / radius_ratio_down.view(self.equ_h, self.equ_w, 1).expand(-1, -1, 3)
         grid_down_w = (-grid_down_raw[:, :, 0].clone() / self.radius).unsqueeze(-1)
         grid_down_h = (-grid_down_raw[:, :, 2].clone() / self.radius).unsqueeze(-1)
         grid_down = torch.cat([grid_down_w, grid_down_h], 2).unsqueeze(0)
@@ -115,7 +117,7 @@ class Cube2Equirec(object):
 
         # Compute the up grid
         radius_ratio_up = torch.abs(y_3d / self.radius)
-        grid_up_raw = self.grid_ball / radius_ratio_up.view(self.output_h, self.output_w, 1).expand(-1, -1, 3)
+        grid_up_raw = self.grid_ball / radius_ratio_up.view(self.equ_h, self.equ_w, 1).expand(-1, -1, 3)
         grid_up_w = (-grid_up_raw[:, :, 0].clone() / self.radius).unsqueeze(-1)
         grid_up_h = (grid_up_raw[:, :, 2].clone() / self.radius).unsqueeze(-1)
         grid_up = torch.cat([grid_up_w, grid_up_h], 2).unsqueeze(0)
@@ -124,7 +126,7 @@ class Cube2Equirec(object):
 
         # Compute the front grid
         radius_ratio_front = torch.abs(z_3d / self.radius)
-        grid_front_raw = self.grid_ball / radius_ratio_front.view(self.output_h, self.output_w, 1).expand(-1, -1, 3)
+        grid_front_raw = self.grid_ball / radius_ratio_front.view(self.equ_h, self.equ_w, 1).expand(-1, -1, 3)
         grid_front_w = (-grid_front_raw[:, :, 0].clone() / self.radius).unsqueeze(-1)
         grid_front_h = (-grid_front_raw[:, :, 1].clone() / self.radius).unsqueeze(-1)
         grid_front = torch.cat([grid_front_w, grid_front_h], 2).unsqueeze(0)
@@ -133,7 +135,7 @@ class Cube2Equirec(object):
 
         # Compute the back grid
         radius_ratio_back = torch.abs(z_3d / self.radius)
-        grid_back_raw = self.grid_ball / radius_ratio_back.view(self.output_h, self.output_w, 1).expand(-1, -1, 3)
+        grid_back_raw = self.grid_ball / radius_ratio_back.view(self.equ_h, self.equ_w, 1).expand(-1, -1, 3)
         grid_back_w = (grid_back_raw[:, :, 0].clone() / self.radius).unsqueeze(-1)
         grid_back_h = (-grid_back_raw[:, :, 1].clone() / self.radius).unsqueeze(-1)
         grid_back = torch.cat([grid_back_w, grid_back_h], 2).unsqueeze(0)
@@ -143,7 +145,7 @@ class Cube2Equirec(object):
 
         # Compute the right grid
         radius_ratio_right = torch.abs(x_3d / self.radius)
-        grid_right_raw = self.grid_ball / radius_ratio_right.view(self.output_h, self.output_w, 1).expand(-1, -1, 3)
+        grid_right_raw = self.grid_ball / radius_ratio_right.view(self.equ_h, self.equ_w, 1).expand(-1, -1, 3)
         grid_right_w = (-grid_right_raw[:, :, 2].clone() / self.radius).unsqueeze(-1)
         grid_right_h = (-grid_right_raw[:, :, 1].clone() / self.radius).unsqueeze(-1)
         grid_right = torch.cat([grid_right_w, grid_right_h], 2).unsqueeze(0)
@@ -152,7 +154,7 @@ class Cube2Equirec(object):
 
         # Compute the left grid
         radius_ratio_left = torch.abs(x_3d / self.radius)
-        grid_left_raw = self.grid_ball / radius_ratio_left.view(self.output_h, self.output_w, 1).expand(-1, -1, 3)
+        grid_left_raw = self.grid_ball / radius_ratio_left.view(self.equ_h, self.equ_w, 1).expand(-1, -1, 3)
         grid_left_w = (grid_left_raw[:, :, 2].clone() / self.radius).unsqueeze(-1)
         grid_left_h = (-grid_left_raw[:, :, 1].clone() / self.radius).unsqueeze(-1)
         grid_left = torch.cat([grid_left_w, grid_left_h], 2).unsqueeze(0)
@@ -171,16 +173,16 @@ class Cube2Equirec(object):
             raise ValueError("Batch size mismatch!!")
 
         if self.CUDA:
-            output = Variable(torch.zeros(1, ch, self.output_h, self.output_w), requires_grad=False).cuda()
+            output = Variable(torch.zeros(1, ch, self.equ_h, self.equ_w), requires_grad=False).cuda()
         else:
-            output = Variable(torch.zeros(1, ch, self.output_h, self.output_w), requires_grad=False)
+            output = Variable(torch.zeros(1, ch, self.equ_h, self.equ_w), requires_grad=False)
 
         for ori in range(6):
-            grid = self.grid[ori, :, :, :].unsqueeze(0) # 1, self.output_h, self.output_w, 2
-            mask = (self.orientation_mask == ori).unsqueeze(0) # 1, self.output_h, self.output_w, 1
+            grid = self.grid[ori, :, :, :].unsqueeze(0) # 1, self.equ_h, self.equ_w, 2
+            mask = (self.orientation_mask == ori).unsqueeze(0) # 1, self.equ_h, self.equ_w, 1
 
             if self.CUDA:
-                masked_grid = Variable(grid * mask.float().expand(-1, -1, -1, 2)).cuda() # 1, self.output_h, self.output_w, 2
+                masked_grid = Variable(grid * mask.float().expand(-1, -1, -1, 2)).cuda() # 1, self.equ_h, self.equ_w, 2
             else:
                 masked_grid = Variable(grid * mask.float().expand(-1, -1, -1, 2))
 
@@ -190,15 +192,15 @@ class Cube2Equirec(object):
                                 source_image, 
                                 masked_grid,
                                 mode=mode
-                                ) # 1, ch, self.output_h, self.output_w
+                                ) # 1, ch, self.equ_h, self.equ_w
 
             if self.CUDA:
                 sampled_image_masked = sampled_image * \
-                                    Variable(mask.float().view(1, 1, self.output_h, self.output_w).expand(1, ch, -1, -1)).cuda()
+                                    Variable(mask.float().view(1, 1, self.equ_h, self.equ_w).expand(1, ch, -1, -1)).cuda()
             else:
                 sampled_image_masked = sampled_image * \
-                                       Variable(mask.float().view(1, 1, self.output_h, self.output_w).expand(1, ch, -1, -1))
-            output = output + sampled_image_masked # 1, ch, self.output_h, self.output_w
+                                       Variable(mask.float().view(1, 1, self.equ_h, self.equ_w).expand(1, ch, -1, -1))
+            output = output + sampled_image_masked # 1, ch, self.equ_h, self.equ_w
 
         return output
 
@@ -219,4 +221,5 @@ class Cube2Equirec(object):
         output = torch.cat(processed, 0)
         return output
 
-
+    def forward(self, batch, mode='bilinear'):
+        return self.ToEquirecTensor(batch, mode)

@@ -4,11 +4,13 @@ import cv2
 import time
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 
-class Equirec2Cube:
-    def __init__(self, batch_size, equ_h, equ_w, out_dim, FOV, RADIUS=128, CUDA=False):
+class Equirec2Cube(nn.Module):
+    def __init__(self, equ_h, equ_w, cube_length, FOV=90, RADIUS=128, CUDA=False):
+        super(Equirec2Cube, self).__init__()
         batch_size = 1
         R_lst = []
         theta_lst = np.array([-90, 0, 90, 180], np.float) / 180 * np.pi
@@ -28,16 +30,16 @@ class Equirec2Cube:
         
         R_lst = [Variable(torch.FloatTensor(x)) for x in R_lst]
         
-        self.out_dim = out_dim
+        self.cube_length = cube_length
         equ_cx = (equ_w - 1) / 2.0
         equ_cy = (equ_h - 1) / 2.0
-        c_x = (out_dim - 1) / 2.0
-        c_y = (out_dim - 1) / 2.0
+        c_x = (cube_length - 1) / 2.0
+        c_y = (cube_length - 1) / 2.0
         
         wangle = (180 - FOV) / 2.0
         w_len = 2 * RADIUS * np.sin(np.radians(FOV / 2.0)) / np.sin(np.radians(wangle))
 
-        f = RADIUS / w_len * out_dim
+        f = RADIUS / w_len * cube_length
         cx = c_x
         cy = c_y
         self.intrisic = {
@@ -47,13 +49,13 @@ class Equirec2Cube:
                 }
         #self.R_lst = R_lst
 
-        interval = w_len / (out_dim - 1) 
+        interval = w_len / (cube_length - 1) 
         
-        z_map = np.zeros([out_dim, out_dim], np.float32) + RADIUS
-        x_map = np.tile((np.arange(out_dim) - c_x) * interval, [out_dim, 1])
-        y_map = np.tile((np.arange(out_dim) - c_y) * interval, [out_dim, 1]).T
+        z_map = np.zeros([cube_length, cube_length], np.float32) + RADIUS
+        x_map = np.tile((np.arange(cube_length) - c_x) * interval, [cube_length, 1])
+        y_map = np.tile((np.arange(cube_length) - c_y) * interval, [cube_length, 1]).T
         D = np.sqrt(x_map**2 + y_map**2 + z_map**2)
-        xyz = np.zeros([out_dim, out_dim, 3], np.float)
+        xyz = np.zeros([cube_length, cube_length, 3], np.float)
         xyz[:, :, 0] = (RADIUS / D) * x_map[:, :]
         xyz[:, :, 1] = (RADIUS / D) * y_map[:, :]
         xyz[:, :, 2] = (RADIUS / D) * z_map[:, :]
@@ -66,16 +68,16 @@ class Equirec2Cube:
         else:
             xyz = Variable(torch.FloatTensor(xyz))
         
-        reshape_xyz = xyz.view(out_dim * out_dim, 3).transpose(0, 1)
+        reshape_xyz = xyz.view(cube_length * cube_length, 3).transpose(0, 1)
         self.batch_size = batch_size # NOTE: Might give an error when batch_size smaller than real batch_size of the batch input
         self.loc = []
         self.grid = []
         for i, R in enumerate(R_lst):
             result = torch.matmul(R, reshape_xyz).transpose(0, 1)
-            tmp_xyz = result.contiguous().view(1, out_dim, out_dim, 3)
+            tmp_xyz = result.contiguous().view(1, cube_length, cube_length, 3)
             self.grid.append(tmp_xyz)
-            lon = torch.atan2(result[:, 0] , result[:, 2]).view(1, out_dim, out_dim, 1) / np.pi
-            lat = torch.asin(result[:, 1] / RADIUS).view(1, out_dim, out_dim, 1) / (np.pi / 2)
+            lon = torch.atan2(result[:, 0] , result[:, 2]).view(1, cube_length, cube_length, 1) / np.pi
+            lat = torch.asin(result[:, 1] / RADIUS).view(1, cube_length, cube_length, 1) / (np.pi / 2)
 
             self.loc.append(torch.cat([lon.repeat(batch_size, 1, 1, 1), lat.repeat(batch_size, 1, 1, 1)], dim=3))
 
@@ -137,4 +139,5 @@ class Equirec2Cube:
         #exit()
         return out_batch
 
-
+    def forward(self,  batch, mode='bilinear'):
+        return self.ToCubeTensor(batch, mode)
