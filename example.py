@@ -11,6 +11,7 @@ if __name__ == '__main__':
     # First we create two object
     # e2c is the module to convert equirectangular into cubemap
     # c2e is the module to convert cubemap back to equirectangular
+    # The parameters are equirectangular height/width, cuebmap dim, and use GPU or not.
     e2c = Utils.Equirec2Cube(512, 1024, 256, CUDA=USE_GPU)
     c2e = Utils.Cube2Equirec(512, 1024, 256, CUDA=USE_GPU)
     
