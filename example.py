@@ -5,7 +5,7 @@ from imageio import imread, imwrite
 import Utils
 
 # If you need to use GPU to accelerate (especially for the need of converting many images)
-USE_GPU = True # set False to disable
+USE_GPU = False # set False to disable
 
 if __name__ == '__main__':
     # First we create two object
