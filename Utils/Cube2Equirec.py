@@ -53,6 +53,7 @@ class Cube2Equirec(nn.Module):
     
     def forward(self, x, mode='bilinear'):
         assert mode in ['nearest', 'bilinear']
+        assert x.shape[0] % 6 == 0
         equ_count = x.shape[0] // 6
         equi = torch.zeros(equ_count, x.shape[1], self.equ_h, self.equ_w).to(x.device)
         for i in range(6):
@@ -96,7 +97,7 @@ class Cube2Equirec(nn.Module):
 
 
 if __name__ == '__main__':
-    batch = torch.zeros(6, 3, 256, 256) + 20
+    batch = torch.zeros(12, 3, 256, 256) + 20
     c2e = Cube2Equirec(512, 1024, 256, False)
     equi = c2e(batch) 
 
